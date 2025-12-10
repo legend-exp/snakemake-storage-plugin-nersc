@@ -93,11 +93,26 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     def _real_path(self) -> str:
         """
         Map the logical /global/... path to the actual /dvs_ro/... path.
+
+        For tests, allow overriding the roots via environment variables:
+        NERSC_TEST_GLOBAL_ROOT and NERSC_TEST_DVS_ROOT.
         """
-        if self.query.startswith("/global/"):
-            return "/dvs_ro" + self.query[len("/global") :]
+        query = self.query
+
+        # Test override: map /global to a temporary root
+        test_global_root = os.environ.get("NERSC_TEST_GLOBAL_ROOT")
+        test_dvs_root = os.environ.get("NERSC_TEST_DVS_ROOT")
+        if test_global_root and test_dvs_root and query.startswith("/global/"):
+            # Replace the /global prefix with the test /dvs_ro root
+            rel = query[len("/global") :]
+            return os.path.join(test_dvs_root, rel.lstrip("/"))
+
+        # Default mapping for real NERSC environment
+        if query.startswith("/global/"):
+            return "/dvs_ro" + query[len("/global") :]
+
         # Should not happen if validation is correct, but be defensive.
-        return self.query
+        return query
 
     # ---------- inventory / metadata ----------
 
@@ -224,7 +239,17 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         matches: list[str] = []
         for path in glob.glob(pattern):
             # Map back to /global/... for Snakemake's perspective.
-            if path.startswith("/dvs_ro/"):
+            test_dvs_root = os.environ.get("NERSC_TEST_DVS_ROOT")
+            test_global_root = os.environ.get("NERSC_TEST_GLOBAL_ROOT")
+
+            logical: str
+            if test_dvs_root and test_global_root and path.startswith(
+                os.path.join(test_dvs_root, "")
+            ):
+                # Map back from test /dvs_ro root to /global
+                rel = path[len(os.path.join(test_dvs_root, "")) :]
+                logical = "/global/" + rel.lstrip("/")
+            elif path.startswith("/dvs_ro/"):
                 logical = "/global" + path[len("/dvs_ro") :]
             else:
                 logical = path
