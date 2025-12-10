@@ -1,240 +1,251 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional, List
+from pathlib import Path
+from typing import Any, Iterable, List, Optional
+
+from snakemake_interface_common.exceptions import WorkflowError  # noqa
+from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
-from snakemake_interface_storage_plugins.storage_provider import (  # noqa
-    StorageProviderBase,
-    StorageQueryValidationResult,
-    ExampleQuery,
-    Operation,
-)
 from snakemake_interface_storage_plugins.storage_object import (
+    StorageObjectGlob,
     StorageObjectRead,
     StorageObjectWrite,
-    StorageObjectGlob,
     retry_decorator,
 )
-from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
+from snakemake_interface_storage_plugins.storage_provider import (  # noqa
+    ExampleQuery,
+    Operation,
+    StorageProviderBase,
+    StorageQueryValidationResult,
+)
 
 
-# Raise errors that will not be handled within this plugin but thrown upwards to
-# Snakemake and the user as WorkflowError.
-from snakemake_interface_common.exceptions import WorkflowError  # noqa
+# NOTE:
+# This is currently implemented as a trivial "local filesystem" storage plugin
+# that operates under the provider's local_prefix. It is meant as a working
+# skeleton that passes the generic interface tests. You can later replace the
+# internals with real NERSC logic while keeping the public behaviour.
 
 
-# Optional:
-# Define settings for your storage plugin (e.g. host url, credentials).
-# They will occur in the Snakemake CLI as --storage-<storage-plugin-name>-<param-name>
-# Make sure that all defined fields are 'Optional' and specify a default value
-# of None or anything else that makes sense in your case.
-# Note that we allow storage plugin settings to be tagged by the user. That means,
-# that each of them can be specified multiple times (an implicit nargs=+), and
-# the user can add a tag in front of each value (e.g. tagname1:value1 tagname2:value2).
-# This way, a storage plugin can be used multiple times within a workflow with different
-# settings.
 @dataclass
 class StorageProviderSettings(StorageProviderSettingsBase):
-    myparam: Optional[int] = field(
+    # For now we don't need any custom settings. Keep a dummy optional parameter
+    # to demonstrate how settings work, but make it non-required so tests pass
+    # without CLI/env configuration.
+    root: Optional[str] = field(
         default=None,
         metadata={
-            "help": "Some help text",
-            # Optionally request that setting is also available for specification
-            # via an environment variable. The variable will be named automatically as
-            # SNAKEMAKE_<storage-plugin-name>_<param-name>, all upper case.
-            # This mechanism should only be used for passwords, usernames, and other
-            # credentials.
-            # For other items, we rather recommend to let people use a profile
-            # for setting defaults
-            # (https://snakemake.readthedocs.io/en/stable/executing/cli.html#profiles).
+            "help": "Optional root directory for NERSC storage (for testing, a local path).",
             "env_var": False,
-            # Optionally specify a function that parses the value given by the user.
-            # This is useful to create complex types from the user input.
-            "parse_func": ...,
-            # If a parse_func is specified, you also have to specify an unparse_func
-            # that converts the parsed value back to a string.
-            "unparse_func": ...,
-            # Optionally specify that setting is required when the executor is in use.
-            "required": True,
-            # Optionally specify multiple args with "nargs": "+"
+            "required": False,
         },
     )
 
 
-# Required:
-# Implementation of your storage provider
-# This class can be empty as the one below.
-# You can however use it to store global information or maintain e.g. a connection
-# pool.
-# Inside of the provider, you can use self.logger (a normal Python logger of type
-# logging.Logger) to log any additional informations or
-# warnings.
 class StorageProvider(StorageProviderBase):
-    # For compatibility with future changes, you should not overwrite the __init__
-    # method. Instead, use __post_init__ to set additional attributes and initialize
-    # futher stuff.
+    # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
-        # This is optional and can be removed if not needed.
-        # Alternatively, you can e.g. prepare a connection to your storage backend here.
-        # and set additional attributes.
-        pass
+        # Determine a base directory for all objects of this provider.
+        # For now, use settings.root if given, otherwise the local_prefix
+        # that Snakemake passes in (a temporary directory in tests).
+        if self.settings and getattr(self.settings, "root", None):
+            self.base_dir = Path(self.settings.root)
+        else:
+            self.base_dir = Path(self.local_prefix)
+
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def example_queries(cls) -> List[ExampleQuery]:
-        """Return an example queries with description for this storage provider (at
-        least one)."""
-        ...
+        """Return example queries with description for this storage provider."""
+        return [
+            ExampleQuery(
+                query="example.txt",
+                description="A file named 'example.txt' in the provider's base directory.",
+            )
+        ]
 
     def rate_limiter_key(self, query: str, operation: Operation) -> Any:
-        """Return a key for identifying a rate limiter given a query and an operation.
-
-        This is used to identify a rate limiter for the query.
-        E.g. for a storage provider like http that would be the host name.
-        For s3 it might be just the endpoint URL.
-        """
-        ...
+        """Return a key for identifying a rate limiter given a query and an operation."""
+        # Local filesystem backend does not really need rate limiting; just
+        # group everything under a single key.
+        return "local"
 
     def default_max_requests_per_second(self) -> float:
-        """Return the default maximum number of requests per second for this storage
-        provider."""
-        ...
+        """Return the default maximum number of requests per second."""
+        # No real rate limiting needed for local filesystem.
+        return 0.0
 
     def use_rate_limiter(self) -> bool:
         """Return False if no rate limiting is needed for this provider."""
-        ...
+        return False
 
     @classmethod
     def is_valid_query(cls, query: str) -> StorageQueryValidationResult:
         """Return whether the given query is valid for this storage provider."""
-        # Ensure that also queries containing wildcards (e.g. {sample}) are accepted
-        # and considered valid. The wildcards will be resolved before the storage
-        # object is actually used.
-        ...
+        # For this simple implementation, accept any non-empty string.
+        if not query:
+            return StorageQueryValidationResult(
+                valid=False,
+                reason="Query must be a non-empty string.",
+            )
+        return StorageQueryValidationResult(valid=True)
 
-    # If required, overwrite the method postprocess_query from StorageProviderBase
-    # in order to e.g. normalize the query or add information from the settings to it.
-    # Otherwise, remove this method as it will be inherited from the base class.
     def postprocess_query(self, query: str) -> str:
-        return query
+        # For now, just normalize to a relative POSIX-style path.
+        return str(Path(query))
 
-    # This can be used to change how the rendered query is displayed in the logs to
-    # prevent accidentally printing sensitive information e.g. tokens in a URL.
     def safe_print(self, query: str) -> str:
         """Process the query to remove potentially sensitive information when printing."""
+        # No sensitive information in this simple implementation.
         return query
 
 
-# Required:
-# Implementation of storage object. If certain methods cannot be supported by your
-# storage (e.g. because it is read-only see
-# snakemake-storage-http for comparison), remove the corresponding base classes
-# from the list of inherited items.
-# Inside of the object, you can use self.provider to access the provider (e.g. for )
-# self.provider.logger, see above, or self.provider.settings).
 class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
-    # For compatibility with future changes, you should not overwrite the __init__
-    # method. Instead, use __post_init__ to set additional attributes and initialize
-    # futher stuff.
+    # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
-        # This is optional and can be removed if not needed.
-        # Alternatively, you can e.g. prepare a connection to your storage backend here.
-        # and set additional attributes.
-        pass
+        # Resolve the absolute path of this object under the provider's base_dir.
+        self.path = Path(self.provider.base_dir) / self.query
 
     async def inventory(self, cache: IOCacheStorageInterface):
-        """From this file, try to find as much existence and modification date
-        information as possible. Only retrieve that information that comes for free
-        given the current object.
-        """
-        # This is optional and can be left as is
-
-        # If this is implemented in a storage object, results have to be stored in
-        # the given IOCache object, using self.cache_key() as key.
-        # Optionally, this can take a custom local suffix, needed e.g. when you want
-        # to cache more items than the current query: self.cache_key(local_suffix=...)
-        pass
+        """Populate IOCache with existence and mtime information if available."""
+        key = self.cache_key()
+        if self.path.exists():
+            cache.exists[key] = True
+            try:
+                cache.mtime[key] = self.path.stat().st_mtime
+            except OSError:
+                pass
+        else:
+            cache.exists[key] = False
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
-        # this is optional and can be left as is
-        return None
+        return str(self.path.parent)
 
     def local_suffix(self) -> str:
         """Return a unique suffix for the local path, determined from self.query."""
-        ...
+        # Use the query itself as suffix; this keeps local paths readable.
+        return self.query
 
     def cleanup(self):
         """Perform local cleanup of any remainders of the storage object."""
-        # self.local_path() should not be removed, as this is taken care of by
-        # Snakemake.
-        ...
+        # Nothing special to do; Snakemake handles removal of local_path().
+        return None
 
-    # Fallible methods should implement some retry logic.
-    # The easiest way to do this (but not the only one) is to use the retry_decorator
-    # provided by snakemake-interface-storage-plugins.
     @retry_decorator
     def exists(self) -> bool:
-        # return True if the object exists
-        ...
+        return self.path.exists()
 
     @retry_decorator
     def mtime(self) -> float:
-        # return the modification time
-        ...
+        try:
+            return self.path.stat().st_mtime
+        except FileNotFoundError as e:
+            raise WorkflowError(f"Object does not exist: {self.query}") from e
 
     @retry_decorator
     def size(self) -> int:
-        # return the size in bytes
-        ...
+        try:
+            if self.path.is_dir():
+                total = 0
+                for p in self.path.rglob("*"):
+                    if p.is_file():
+                        total += p.stat().st_size
+                return total
+            return self.path.stat().st_size
+        except FileNotFoundError as e:
+            raise WorkflowError(f"Object does not exist: {self.query}") from e
 
     @retry_decorator
     def local_footprint(self) -> int:
-        # Local footprint is the size of the object on the local disk.
-        # For directories, this should return the recursive sum of the
-        # directory file sizes.
-        # If the storage provider supports ondemand eligibility (see retrieve_object()
-        # below), this should return 0 if the object is not downloaded but e.g.
-        # mounted upon retrieval.
-        # If this method is not overwritten here, it defaults to self.size().
-        ...
+        # For this simple implementation, local footprint equals size.
+        return self.size()
 
     @retry_decorator
     def retrieve_object(self):
-        # Ensure that the object is accessible locally under self.local_path()
-        # Optionally, this can make use of the attribute self.is_ondemand_eligible,
-        # which indicates that the object could be retrieved on demand,
-        # e.g. by only symlinking or mounting it from whatever network storage this
-        # plugin provides. For example, objects with self.is_ondemand_eligible == True
-        # could mount the object via fuse instead of downloading it.
-        # The job can then transparently access only the parts that matter to it
-        # without having to wait for the full download.
-        # On demand eligibility is calculated via Snakemake's access pattern annotation.
-        # If no access pattern is annotated by the workflow developers,
-        # self.is_ondemand_eligible is by default set to False.
-        ...
+        """Ensure that the object is accessible locally under self.local_path()."""
+        # For this local backend, "retrieval" is copying from provider path to
+        # the Snakemake-managed local_path().
+        src = self.path
+        dst = Path(self.local_path())
 
-    # The following to methods are only required if the class inherits from
-    # StorageObjectReadWrite.
+        if not src.exists():
+            raise WorkflowError(f"Cannot retrieve non-existing object: {self.query}")
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        if src.is_dir():
+            # Simple recursive copy for directories.
+            for p in src.rglob("*"):
+                rel = p.relative_to(src)
+                target = dst / rel
+                if p.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(p.read_bytes())
+        else:
+            dst.write_bytes(src.read_bytes())
 
     @retry_decorator
     def store_object(self):
-        # Ensure that the object is stored at the location specified by
-        # self.local_path().
-        ...
+        """Store the object from self.local_path() into the provider path."""
+        src = Path(self.local_path())
+        dst = self.path
+
+        if not src.exists():
+            raise WorkflowError(
+                f"Local object to store does not exist: {self.local_path()}"
+            )
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        if src.is_dir():
+            for p in src.rglob("*"):
+                rel = p.relative_to(src)
+                target = dst / rel
+                if p.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(p.read_bytes())
+        else:
+            dst.write_bytes(src.read_bytes())
 
     @retry_decorator
     def remove(self):
-        # Remove the object from the storage.
-        ...
-
-    # The following to methods are only required if the class inherits from
-    # StorageObjectGlob.
+        """Remove the object from the storage."""
+        if not self.path.exists():
+            return
+        if self.path.is_dir():
+            for p in sorted(self.path.rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                else:
+                    p.rmdir()
+            self.path.rmdir()
+        else:
+            self.path.unlink()
 
     @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
-        """Return a list of candidate matches in the storage for the query."""
-        # This is used by glob_wildcards() to find matches for wildcards in the query.
-        # The method has to return concretized queries without any remaining wildcards.
-        # Use snakemake_executor_plugins.io.get_constant_prefix(self.query) to get the
-        # prefix of the query before the first wildcard.
-        ...
+        """Return a list of candidate matches in the storage for the query.
+
+        For this simple implementation, we interpret the query as a glob pattern
+        relative to the provider's base_dir.
+        """
+        base = Path(self.provider.base_dir)
+        pattern = self.query
+
+        # Use pathlib's glob to expand the pattern.
+        matches: list[str] = []
+        for p in base.glob(pattern):
+            # Return queries relative to base_dir (no wildcards).
+            rel = p.relative_to(base)
+            matches.append(str(rel))
+
+        return matches

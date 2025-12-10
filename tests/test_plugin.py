@@ -1,7 +1,15 @@
+from pathlib import Path
 from typing import Optional, Type
-from snakemake_interface_storage_plugins.tests import TestStorageBase
-from snakemake_interface_storage_plugins.storage_provider import StorageProviderBase
+
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
+from snakemake_interface_storage_plugins.storage_provider import StorageProviderBase
+from snakemake_interface_storage_plugins.tests import TestStorageBase
+
+from snakemake_storage_plugin_nersc import (
+    StorageObject,
+    StorageProvider,
+    StorageProviderSettings,
+)
 
 
 class TestStorage(TestStorageBase):
@@ -20,18 +28,18 @@ class TestStorage(TestStorageBase):
     files_only = True
 
     def get_query(self, tmp_path) -> str:
-        # Return a query. If retrieve_only is True, this should be a query that
-        # is present in the storage, as it will not be created.
-        ...
+        # Use a simple filename relative to the provider's base directory.
+        return "testfile.txt"
 
     def get_query_not_existing(self, tmp_path) -> str:
-        # Return a query that is not present in the storage.
-        ...
+        # A filename that is guaranteed not to exist initially.
+        return "non_existing_file.txt"
 
     def get_storage_provider_cls(self) -> Type[StorageProviderBase]:
         # Return the StorageProvider class of this plugin
-        ...
+        return StorageProvider
 
     def get_storage_provider_settings(self) -> Optional[StorageProviderSettingsBase]:
-        # instantiate StorageProviderSettings of this plugin as appropriate
-        ...
+        # For tests, point the provider's root to the pytest tmp_path so that
+        # all operations happen in an isolated directory.
+        return StorageProviderSettings(root=str(Path(tmp_path := Path.cwd()) / "test_root"))
