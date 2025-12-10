@@ -243,8 +243,10 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
             test_global_root = os.environ.get("NERSC_TEST_GLOBAL_ROOT")
 
             logical: str
-            if test_dvs_root and test_global_root and path.startswith(
-                os.path.join(test_dvs_root, "")
+            if (
+                test_dvs_root
+                and test_global_root
+                and path.startswith(os.path.join(test_dvs_root, ""))
             ):
                 # Map back from test /dvs_ro root to /global
                 rel = path[len(os.path.join(test_dvs_root, "")) :]
