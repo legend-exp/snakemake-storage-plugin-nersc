@@ -29,7 +29,8 @@ class TestStorage(TestStorageBase):
 
     # Use a test-local physical root under the repo / CWD so tests work anywhere.
     TEST_PHYSICAL_ROOT = Path("_nersc_test_dvs_ro").absolute()
-    TEST_LOGICAL_ROOT = "/global"
+    # Use a non-privileged logical root so the test harness can create dirs/files.
+    TEST_LOGICAL_ROOT = str(Path("_nersc_test_global").absolute())
 
     def get_query(self, tmp_path) -> str:
         # Ensure physical root exists
@@ -42,21 +43,21 @@ class TestStorage(TestStorageBase):
         real_path.write_text("hello nersc")
 
         # Logical query that Snakemake would see.
-        return "/" + os.path.join("global", rel_path)
+        return str(Path(self.TEST_LOGICAL_ROOT) / rel_path)
 
     def get_query_not_existing(self, tmp_path) -> str:
         # A path that we do not create under the simulated physical root.
         rel_path = os.path.join(
             "cfs", "cdirs", "myproject", "data", "does_not_exist.txt"
         )
-        return "/" + os.path.join("global", rel_path)
+        return str(Path(self.TEST_LOGICAL_ROOT) / rel_path)
 
     def get_storage_provider_cls(self) -> Type[StorageProviderBase]:
         # Return the StorageProvider class of this plugin
         return StorageProvider
 
     def get_storage_provider_settings(self) -> Optional[StorageProviderSettingsBase]:
-        # Configure plugin to map /global → TEST_PHYSICAL_ROOT
+        # Configure plugin to map TEST_LOGICAL_ROOT → TEST_PHYSICAL_ROOT
         return StorageProviderSettings(
             logical_root=self.TEST_LOGICAL_ROOT,
             physical_root=str(self.TEST_PHYSICAL_ROOT),
