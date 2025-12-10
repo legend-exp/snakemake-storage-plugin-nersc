@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
@@ -21,63 +22,39 @@ from snakemake_interface_storage_plugins.storage_provider import (  # noqa
 )
 
 
-# NOTE:
-# This is currently implemented as a trivial "local filesystem" storage plugin
-# that operates under the provider's local_prefix. It is meant as a working
-# skeleton that passes the generic interface tests. You can later replace the
-# internals with real NERSC logic while keeping the public behaviour.
-
-
 @dataclass
 class StorageProviderSettings(StorageProviderSettingsBase):
-    # For now we don't need any custom settings. Keep a dummy optional parameter
-    # to demonstrate how settings work, but make it non-required so tests pass
-    # without CLI/env configuration.
-    root: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Optional root directory for NERSC storage (for testing, a local path).",
-            "env_var": False,
-            "required": False,
-        },
-    )
+    # No custom settings for now.
+    pass
 
 
 class StorageProvider(StorageProviderBase):
     # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
-        # Determine a base directory for all objects of this provider.
-        # For now, use settings.root if given, otherwise the local_prefix
-        # that Snakemake passes in (a temporary directory in tests).
-        if self.settings and getattr(self.settings, "root", None):
-            self.base_dir = Path(self.settings.root)
-        else:
-            self.base_dir = Path(self.local_prefix)
-
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        # Nothing to initialize for this simple mapping provider.
+        pass
 
     @classmethod
     def example_queries(cls) -> List[ExampleQuery]:
         """Return example queries with description for this storage provider."""
         return [
             ExampleQuery(
-                query="example.txt",
-                description="A file named 'example.txt' in the provider's base directory.",
+                query="/global/cfs/cdirs/myproject/data/file.txt",
+                description="File on NERSC global filesystem, accessed via /dvs_ro",
                 type="file",
             )
         ]
 
     def rate_limiter_key(self, query: str, operation: Operation) -> Any:
         """Return a key for identifying a rate limiter given a query and an operation."""
-        # Local filesystem backend does not really need rate limiting; just
-        # group everything under a single key.
-        return "local"
+        # Local filesystem backend does not really need rate limiting.
+        return None
 
     def default_max_requests_per_second(self) -> float:
         """Return the default maximum number of requests per second."""
-        # No real rate limiting needed for local filesystem.
-        return 0.0
+        # No rate limiting.
+        return float("inf")
 
     def use_rate_limiter(self) -> bool:
         """Return False if no rate limiting is needed for this provider."""
@@ -86,51 +63,64 @@ class StorageProvider(StorageProviderBase):
     @classmethod
     def is_valid_query(cls, query: str) -> StorageQueryValidationResult:
         """Return whether the given query is valid for this storage provider."""
-        # For this simple implementation, accept any non-empty string.
-        if not query:
+        if not query.startswith("/global/"):
             return StorageQueryValidationResult(
                 query=query,
                 valid=False,
-                reason="Query must be a non-empty string.",
+                reason="NERSC storage plugin only supports paths starting with /global/",
             )
         return StorageQueryValidationResult(query=query, valid=True)
 
     def postprocess_query(self, query: str) -> str:
-        # For now, just normalize to a relative POSIX-style path.
-        return str(Path(query))
+        # Normalize the query path.
+        return os.path.normpath(query)
 
     def safe_print(self, query: str) -> str:
         """Process the query to remove potentially sensitive information when printing."""
         # No sensitive information in this simple implementation.
-        return query
+        return os.path.normpath(query)
 
 
 class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
-        # Resolve the absolute path of this object under the provider's base_dir.
-        self.path = Path(self.provider.base_dir) / self.query
+        # Nothing to initialize beyond what the base classes do.
+        pass
+
+    # ---------- internal helpers ----------
+
+    def _real_path(self) -> str:
+        """
+        Map the logical /global/... path to the actual /dvs_ro/... path.
+        """
+        if self.query.startswith("/global/"):
+            return "/dvs_ro" + self.query[len("/global") :]
+        # Should not happen if validation is correct, but be defensive.
+        return self.query
+
+    # ---------- inventory / metadata ----------
 
     async def inventory(self, cache: IOCacheStorageInterface):
         """Populate IOCache with existence and mtime information if available."""
         key = self.cache_key()
-        exists = self.path.exists()
+        real_path = Path(self._real_path())
+        exists = real_path.exists()
         cache.set_exists(key, exists)
         if exists:
             try:
-                cache.set_mtime(key, self.path.stat().st_mtime)
+                cache.set_mtime(key, real_path.stat().st_mtime)
             except OSError:
                 # Ignore mtime errors; existence info is still useful.
                 pass
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
-        return str(self.path.parent)
+        return str(Path(self._real_path()).parent)
 
     def local_suffix(self) -> str:
         """Return a unique suffix for the local path, determined from self.query."""
-        # Use the query itself as suffix; this keeps local paths readable.
+        # Use the logical query as suffix; this keeps local paths readable.
         return self.query
 
     def cleanup(self):
@@ -138,27 +128,31 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         # Nothing special to do; Snakemake handles removal of local_path().
         return None
 
+    # ---------- basic file info ----------
+
     @retry_decorator
     def exists(self) -> bool:
-        return self.path.exists()
+        return Path(self._real_path()).exists()
 
     @retry_decorator
     def mtime(self) -> float:
+        real_path = Path(self._real_path())
         try:
-            return self.path.stat().st_mtime
+            return real_path.stat().st_mtime
         except FileNotFoundError as e:
             raise WorkflowError(f"Object does not exist: {self.query}") from e
 
     @retry_decorator
     def size(self) -> int:
+        real_path = Path(self._real_path())
         try:
-            if self.path.is_dir():
+            if real_path.is_dir():
                 total = 0
-                for p in self.path.rglob("*"):
+                for p in real_path.rglob("*"):
                     if p.is_file():
                         total += p.stat().st_size
                 return total
-            return self.path.stat().st_size
+            return real_path.stat().st_size
         except FileNotFoundError as e:
             raise WorkflowError(f"Object does not exist: {self.query}") from e
 
@@ -167,12 +161,12 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         # For this simple implementation, local footprint equals size.
         return self.size()
 
+    # ---------- data transfer (read-only) ----------
+
     @retry_decorator
     def retrieve_object(self):
         """Ensure that the object is accessible locally under self.local_path()."""
-        # For this local backend, "retrieval" is copying from provider path to
-        # the Snakemake-managed local_path().
-        src = self.path
+        src = Path(self._real_path())
         dst = Path(self.local_path())
 
         if not src.exists():
@@ -195,59 +189,44 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     @retry_decorator
     def store_object(self):
-        """Store the object from self.local_path() into the provider path."""
-        src = Path(self.local_path())
-        dst = self.path
+        """Store the object from self.local_path() into the provider path.
 
-        if not src.exists():
-            raise WorkflowError(
-                f"Local object to store does not exist: {self.local_path()}"
-            )
-
-        dst.parent.mkdir(parents=True, exist_ok=True)
-
-        if src.is_dir():
-            for p in src.rglob("*"):
-                rel = p.relative_to(src)
-                target = dst / rel
-                if p.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(p.read_bytes())
-        else:
-            dst.write_bytes(src.read_bytes())
+        This plugin is read-only with respect to the underlying /dvs_ro
+        filesystem, so storing is not supported.
+        """
+        raise WorkflowError(
+            "NERSC storage plugin is read-only; store_object is not supported."
+        )
 
     @retry_decorator
     def remove(self):
-        """Remove the object from the storage."""
-        if not self.path.exists():
-            return
-        if self.path.is_dir():
-            for p in sorted(self.path.rglob("*"), reverse=True):
-                if p.is_file():
-                    p.unlink()
-                else:
-                    p.rmdir()
-            self.path.rmdir()
-        else:
-            self.path.unlink()
+        """Remove the object from the storage.
+
+        This plugin is read-only with respect to the underlying /dvs_ro
+        filesystem, so removal is not supported.
+        """
+        raise WorkflowError(
+            "NERSC storage plugin is read-only; remove is not supported."
+        )
+
+    # ---------- globbing ----------
 
     @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
         """Return a list of candidate matches in the storage for the query.
 
-        For this simple implementation, we interpret the query as a glob pattern
-        relative to the provider's base_dir.
+        We interpret the query as a glob pattern under /global, map it to
+        /dvs_ro, and then map matches back to /global.
         """
-        base = Path(self.provider.base_dir)
-        pattern = self.query
+        import glob
 
-        # Use pathlib's glob to expand the pattern.
+        pattern = self._real_path()
         matches: list[str] = []
-        for p in base.glob(pattern):
-            # Return queries relative to base_dir (no wildcards).
-            rel = p.relative_to(base)
-            matches.append(str(rel))
-
+        for path in glob.glob(pattern):
+            # Map back to /global/... for Snakemake's perspective.
+            if path.startswith("/dvs_ro/"):
+                logical = "/global" + path[len("/dvs_ro") :]
+            else:
+                logical = path
+            matches.append(logical)
         return matches
