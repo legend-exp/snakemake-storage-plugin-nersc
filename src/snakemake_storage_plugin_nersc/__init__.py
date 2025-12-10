@@ -117,17 +117,17 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     # ---------- inventory / metadata ----------
 
     async def inventory(self, cache: IOCacheStorageInterface):
-        """Populate IOCache with existence and mtime information if available."""
-        key = self.cache_key()
-        real_path = Path(self._real_path())
-        exists = real_path.exists()
-        cache.set_exists(key, exists)
-        if exists:
-            try:
-                cache.set_mtime(key, real_path.stat().st_mtime)
-            except OSError:
-                # Ignore mtime errors; existence info is still useful.
-                pass
+        """Populate IOCache with existence and mtime information if available.
+
+        The IOCache interface in snakemake-interface-storage-plugins 4.x does not
+        expose setters here, so we simply perform the checks to ensure that
+        inventory can be called without raising, and let Snakemake fall back to
+        direct exists()/mtime() calls when needed.
+        """
+        # Just touch the path to ensure this method is side-effect free and
+        # does not raise for existing/non-existing objects.
+        _ = Path(self._real_path()).exists()
+        return
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
