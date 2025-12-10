@@ -6,7 +6,6 @@ from snakemake_interface_storage_plugins.storage_provider import StorageProvider
 from snakemake_interface_storage_plugins.tests import TestStorageBase
 
 from snakemake_storage_plugin_nersc import (
-    StorageObject,
     StorageProvider,
     StorageProviderSettings,
 )
@@ -42,6 +41,4 @@ class TestStorage(TestStorageBase):
     def get_storage_provider_settings(self) -> Optional[StorageProviderSettingsBase]:
         # For tests, point the provider's root to the pytest tmp_path so that
         # all operations happen in an isolated directory.
-        return StorageProviderSettings(
-            root=str(Path(tmp_path := Path.cwd()) / "test_root")
-        )
+        return StorageProviderSettings(root=str(Path.cwd() / "test_root"))
