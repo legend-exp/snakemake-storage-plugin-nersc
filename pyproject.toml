@@ -21,6 +21,9 @@ dev = ["ruff", "coverage", "pytest", "twine", "build", "pytest-cov"]
 Repository = "https://github.com/legend-exp/snakemake-storage-plugin-nersc"
 Documentation = "https://snakemake.github.io/snakemake-plugin-catalog/plugins/storage/nersc.html"
 
+[project.entry-points."snakemake.storage_plugins"]
+nersc = "snakemake_storage_plugin_nersc:StorageProvider"
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
