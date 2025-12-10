@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from typing import Optional, Type
 
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
