@@ -24,8 +24,22 @@ from snakemake_interface_storage_plugins.storage_provider import (  # noqa
 
 @dataclass
 class StorageProviderSettings(StorageProviderSettingsBase):
-    # No custom settings for now.
-    pass
+    """Settings for the NERSC storage plugin.
+
+    logical_root:
+        The logical root prefix that Snakemake will see in queries.
+        Defaults to "/global" (NERSC convention).
+
+    physical_root:
+        The physical root on the filesystem that should actually be used
+        for I/O. Defaults to "/dvs_ro" (NERSC read-only mirror).
+
+    By overriding these in tests or other environments, the plugin can be
+    used without requiring real /global or /dvs_ro mounts.
+    """
+
+    logical_root: Optional[str] = None
+    physical_root: Optional[str] = None
 
 
 class StorageProvider(StorageProviderBase):
@@ -63,11 +77,12 @@ class StorageProvider(StorageProviderBase):
     @classmethod
     def is_valid_query(cls, query: str) -> StorageQueryValidationResult:
         """Return whether the given query is valid for this storage provider."""
-        if not query.startswith("/global/"):
+        # We only accept absolute paths; further checks are done in _real_path.
+        if not query.startswith("/"):
             return StorageQueryValidationResult(
                 query=query,
                 valid=False,
-                reason="NERSC storage plugin only supports paths starting with /global/",
+                reason="NERSC storage plugin only supports absolute paths.",
             )
         return StorageQueryValidationResult(query=query, valid=True)
 
@@ -85,34 +100,43 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
-        # Nothing to initialize beyond what the base classes do.
-        pass
+        # Cache roots from provider settings, with NERSC defaults.
+        settings: StorageProviderSettings = self.provider.settings  # type: ignore[assignment]
+        self._logical_root = (settings.logical_root or "/global").rstrip("/")
+        self._physical_root = (settings.physical_root or "/dvs_ro").rstrip("/")
 
     # ---------- internal helpers ----------
 
     def _real_path(self) -> str:
-        """
-        Map the logical /global/... path to the actual /dvs_ro/... path.
+        """Map the logical path to the actual physical filesystem path.
 
-        For tests, allow overriding the roots via environment variables:
-        NERSC_TEST_GLOBAL_ROOT and NERSC_TEST_DVS_ROOT.
+        The mapping is:
+
+            <logical_root>/...  ->  <physical_root>/...
+
+        with defaults /global -> /dvs_ro for NERSC. In tests or other
+        environments, logical_root and physical_root can be overridden via
+        StorageProviderSettings.
         """
         query = self.query
 
-        # Test override: map /global to a temporary root
-        test_global_root = os.environ.get("NERSC_TEST_GLOBAL_ROOT")
-        test_dvs_root = os.environ.get("NERSC_TEST_DVS_ROOT")
-        if test_global_root and test_dvs_root and query.startswith("/global/"):
-            # Replace the /global prefix with the test /dvs_ro root
-            rel = query[len("/global") :]
-            return os.path.join(test_dvs_root, rel.lstrip("/"))
+        logical_prefix = self._logical_root + "/"
+        if query.startswith(logical_prefix):
+            rel = query[len(self._logical_root) :]
+            return os.path.join(self._physical_root, rel.lstrip("/"))
 
-        # Default mapping for real NERSC environment
-        if query.startswith("/global/"):
-            return "/dvs_ro" + query[len("/global") :]
-
-        # Should not happen if validation is correct, but be defensive.
+        # If the query does not start with the logical root, fall back to
+        # using it as-is. This should not normally happen if queries are
+        # validated and constructed consistently.
         return query
+
+    def _logical_from_physical(self, physical_path: str) -> str:
+        """Map a physical path back to the logical namespace for globbing."""
+        physical_prefix = self._physical_root + os.sep
+        if physical_path.startswith(physical_prefix):
+            rel = physical_path[len(physical_prefix) :]
+            return self._logical_root + "/" + rel.lstrip("/")
+        return physical_path
 
     # ---------- inventory / metadata ----------
 
@@ -206,8 +230,8 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     def store_object(self):
         """Store the object from self.local_path() into the provider path.
 
-        This plugin is read-only with respect to the underlying /dvs_ro
-        filesystem, so storing is not supported.
+        This plugin is read-only with respect to the underlying filesystem,
+        so storing is not supported.
         """
         raise WorkflowError(
             "NERSC storage plugin is read-only; store_object is not supported."
@@ -217,8 +241,8 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     def remove(self):
         """Remove the object from the storage.
 
-        This plugin is read-only with respect to the underlying /dvs_ro
-        filesystem, so removal is not supported.
+        This plugin is read-only with respect to the underlying filesystem,
+        so removal is not supported.
         """
         raise WorkflowError(
             "NERSC storage plugin is read-only; remove is not supported."
@@ -230,30 +254,14 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     def list_candidate_matches(self) -> Iterable[str]:
         """Return a list of candidate matches in the storage for the query.
 
-        We interpret the query as a glob pattern under /global, map it to
-        /dvs_ro, and then map matches back to /global.
+        We interpret the query as a glob pattern under logical_root, map it to
+        physical_root, and then map matches back to logical_root.
         """
         import glob
 
         pattern = self._real_path()
         matches: list[str] = []
         for path in glob.glob(pattern):
-            # Map back to /global/... for Snakemake's perspective.
-            test_dvs_root = os.environ.get("NERSC_TEST_DVS_ROOT")
-            test_global_root = os.environ.get("NERSC_TEST_GLOBAL_ROOT")
-
-            logical: str
-            if (
-                test_dvs_root
-                and test_global_root
-                and path.startswith(os.path.join(test_dvs_root, ""))
-            ):
-                # Map back from test /dvs_ro root to /global
-                rel = path[len(os.path.join(test_dvs_root, "")) :]
-                logical = "/global/" + rel.lstrip("/")
-            elif path.startswith("/dvs_ro/"):
-                logical = "/global" + path[len("/dvs_ro") :]
-            else:
-                logical = path
+            logical = self._logical_from_physical(path)
             matches.append(logical)
         return matches
