@@ -64,6 +64,7 @@ class StorageProvider(StorageProviderBase):
             ExampleQuery(
                 query="example.txt",
                 description="A file named 'example.txt' in the provider's base directory.",
+                type="file",
             )
         ]
 
@@ -88,10 +89,11 @@ class StorageProvider(StorageProviderBase):
         # For this simple implementation, accept any non-empty string.
         if not query:
             return StorageQueryValidationResult(
+                query=query,
                 valid=False,
                 reason="Query must be a non-empty string.",
             )
-        return StorageQueryValidationResult(valid=True)
+        return StorageQueryValidationResult(query=query, valid=True)
 
     def postprocess_query(self, query: str) -> str:
         # For now, just normalize to a relative POSIX-style path.
@@ -113,14 +115,14 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     async def inventory(self, cache: IOCacheStorageInterface):
         """Populate IOCache with existence and mtime information if available."""
         key = self.cache_key()
-        if self.path.exists():
-            cache.exists[key] = True
+        exists = self.path.exists()
+        cache.set_exists(key, exists)
+        if exists:
             try:
-                cache.mtime[key] = self.path.stat().st_mtime
+                cache.set_mtime(key, self.path.stat().st_mtime)
             except OSError:
+                # Ignore mtime errors; existence info is still useful.
                 pass
-        else:
-            cache.exists[key] = False
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
