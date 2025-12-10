@@ -52,7 +52,9 @@ class TestStorage(TestStorageBase):
 
     def get_query_not_existing(self, tmp_path) -> str:
         # A path that we do not create under the simulated /dvs_ro.
-        rel_path = os.path.join("cfs", "cdirs", "myproject", "data", "does_not_exist.txt")
+        rel_path = os.path.join(
+            "cfs", "cdirs", "myproject", "data", "does_not_exist.txt"
+        )
         return "/" + os.path.join("global", rel_path)
 
     def get_storage_provider_cls(self) -> Type[StorageProviderBase]:
