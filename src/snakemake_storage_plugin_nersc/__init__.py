@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, List, Optional
 
 from snakemake_interface_common.exceptions import WorkflowError  # noqa
@@ -78,7 +77,7 @@ class StorageProvider(StorageProviderBase):
     @classmethod
     def is_valid_query(cls, query: str) -> StorageQueryValidationResult:
         """Return whether the given query is valid for this storage provider."""
-        # We only accept absolute paths; further checks are done in _real_path.
+        # We only accept absolute paths; further checks are done in _to_read_only.
         if not query.startswith("/"):
             return StorageQueryValidationResult(
                 query=query,
@@ -88,13 +87,13 @@ class StorageProvider(StorageProviderBase):
         return StorageQueryValidationResult(query=query, valid=True)
 
     def postprocess_query(self, query: str) -> str:
-        # Normalize the query path.
-        return os.path.normpath(query)
+        # Normalize the query path (POSIX semantics, without filesystem access).
+        return str(PurePosixPath(query))
 
     def safe_print(self, query: str) -> str:
         """Process the query to remove potentially sensitive information when printing."""
         # No sensitive information in this simple implementation.
-        return os.path.normpath(query)
+        return str(PurePosixPath(query))
 
 
 class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
@@ -103,31 +102,33 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     def __post_init__(self):
         # Cache roots from provider settings, with NERSC defaults.
         settings: StorageProviderSettings = self.provider.settings  # type: ignore[assignment]
-        self._logical_root = (settings.logical_root or "/global").rstrip("/")
-        self._physical_ro_root = (settings.physical_ro_root or "/dvs_ro").rstrip("/")
+        self._logical_root = PurePosixPath(settings.logical_root or "/global")
+        self._physical_ro_root = PurePosixPath(settings.physical_ro_root or "/dvs_ro")
 
-    def _to_read_only(self) -> str:
-        """Map the logical query path to a given physical root."""
-        query = self.query
+    def _to_read_only(self) -> Path:
+        """Map the logical query path to the physical read-only root."""
+        query = PurePosixPath(self.query)
 
-        logical_prefix = self._logical_root + "/"
-        if query.startswith(logical_prefix):
-            rel = query[len(self._logical_root) :]
-            return os.path.join(self._physical_ro_root, rel.lstrip("/"))
+        try:
+            rel = query.relative_to(self._logical_root)
+        except ValueError:
+            # If the query does not start with the logical root, fall back to
+            # using it as-is. This should not normally happen if queries are
+            # validated and constructed consistently.
+            return Path(str(query))
 
-        # If the query does not start with the logical root, fall back to
-        # using it as-is. This should not normally happen if queries are
-        # validated and constructed consistently.
-        return query
+        return Path(str(self._physical_ro_root / rel))
 
     def _to_original(self, path: str) -> str:
         """Map a physical path back to the logical namespace for globbing."""
-        physical_prefix = self._physical_ro_root + os.sep
-        if path.startswith(physical_prefix):
-            rel = path[len(physical_prefix) :]
-            return self._logical_root + "/" + rel.lstrip("/")
+        physical = PurePosixPath(path)
 
-        return path
+        try:
+            rel = physical.relative_to(self._physical_ro_root)
+        except ValueError:
+            return str(physical)
+
+        return str(self._logical_root / rel)
 
     async def inventory(self, cache: IOCacheStorageInterface):
         """Populate IOCache with existence and mtime information if available.
@@ -141,7 +142,7 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
-        return str(Path(self._to_read_only()).parent)
+        return str(self._to_read_only().parent)
 
     def local_suffix(self) -> str:
         """Return a unique suffix for the local path, determined from self.query."""
@@ -155,11 +156,11 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     @retry_decorator
     def exists(self) -> bool:
-        return Path(self._to_read_only()).exists()
+        return self._to_read_only().exists()
 
     @retry_decorator
     def mtime(self) -> float:
-        real_path = Path(self._to_read_only())
+        real_path = self._to_read_only()
         try:
             return real_path.stat().st_mtime
         except FileNotFoundError as e:
@@ -167,7 +168,7 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     @retry_decorator
     def size(self) -> int:
-        real_path = Path(self._to_read_only())
+        real_path = self._to_read_only()
         try:
             if real_path.is_dir():
                 total = 0
@@ -187,7 +188,7 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     @retry_decorator
     def retrieve_object(self):
         """Ensure that the object is accessible locally under self.local_path()."""
-        src = Path(self._to_read_only())
+        src = self._to_read_only()
         dst = Path(self.local_path())
 
         if not src.exists():
@@ -240,9 +241,8 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         """
         import glob
 
-        pattern = self._to_read_only()
+        pattern = str(self._to_read_only())
         matches: list[str] = []
         for path in glob.glob(pattern):
-            logical = self._to_original(path)
-            matches.append(logical)
+            matches.append(self._to_original(path))
         return matches
