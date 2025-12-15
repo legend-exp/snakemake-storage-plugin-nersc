@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/legend-exp/snakemake-storage-plugin-nersc/compare/v0.1.0...v0.1.1) (2025-12-15)
+
+
+### Bug Fixes
+
+* re-add conventional prs workflow ([60a9d77](https://github.com/legend-exp/snakemake-storage-plugin-nersc/commit/60a9d77e42b6bac5ad3eecf02380799d7acfced5))
+
 ## 0.1.0 (2025-12-15)
 
 
