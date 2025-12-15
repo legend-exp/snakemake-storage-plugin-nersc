@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional, Type
 
+import pytest
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
 from snakemake_interface_storage_plugins.storage_provider import StorageProviderBase
 from snakemake_interface_storage_plugins.tests import TestStorageBase
@@ -27,38 +28,44 @@ class TestStorage(TestStorageBase):
     # supports directory down-/upload, definitely do that)
     files_only = True
 
-    # Use a test-local physical root under the repo / CWD so tests work anywhere.
-    TEST_PHYSICAL_ROOT = Path("_nersc_test_dvs_ro").absolute()
-    # Use a non-privileged logical root so the test harness can create dirs/files.
-    TEST_LOGICAL_ROOT = str(Path("_nersc_test_global").absolute())
+    @pytest.fixture(autouse=True)
+    def _init_test_roots(self, tmp_path: Path):
+        """Initialize per-test roots under pytest's tmp_path.
+
+        The base test harness may call get_storage_provider_settings() before
+        get_query(), so we must ensure the roots are available early.
+        """
+        self._test_physical_root = (tmp_path / "dvs_ro").resolve()
+        self._test_logical_root = (tmp_path / "global").resolve()
+
+        self._test_physical_root.mkdir(parents=True, exist_ok=True)
+        self._test_logical_root.mkdir(parents=True, exist_ok=True)
+
+        yield
 
     def get_query(self, tmp_path) -> str:
-        # Ensure physical root exists
-        self.TEST_PHYSICAL_ROOT.mkdir(parents=True, exist_ok=True)
-
         # Create a file under the simulated physical root.
         rel_path = os.path.join("cfs", "cdirs", "myproject", "data", "test.txt")
-        real_path = self.TEST_PHYSICAL_ROOT / rel_path
+        real_path = self._test_physical_root / rel_path
         real_path.parent.mkdir(parents=True, exist_ok=True)
         real_path.write_text("hello nersc")
 
-        # Logical query that Snakemake would see.
-        return str(Path(self.TEST_LOGICAL_ROOT) / rel_path)
+        # Return a logical query under the simulated logical root.
+        return str(self._test_logical_root / rel_path)
 
     def get_query_not_existing(self, tmp_path) -> str:
-        # A path that we do not create under the simulated physical root.
         rel_path = os.path.join(
             "cfs", "cdirs", "myproject", "data", "does_not_exist.txt"
         )
-        return str(Path(self.TEST_LOGICAL_ROOT) / rel_path)
+        return str(self._test_logical_root / rel_path)
 
     def get_storage_provider_cls(self) -> Type[StorageProviderBase]:
         # Return the StorageProvider class of this plugin
         return StorageProvider
 
     def get_storage_provider_settings(self) -> Optional[StorageProviderSettingsBase]:
-        # Configure plugin to map TEST_LOGICAL_ROOT → TEST_PHYSICAL_ROOT
+        # Use tmp_path-based roots initialized by the autouse fixture.
         return StorageProviderSettings(
-            logical_root=self.TEST_LOGICAL_ROOT,
-            physical_ro_root=str(self.TEST_PHYSICAL_ROOT),
+            logical_root=str(self._test_logical_root),
+            physical_ro_root=str(self._test_physical_root),
         )
