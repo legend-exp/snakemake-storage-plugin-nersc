@@ -10,7 +10,7 @@ maintainers = [
 ]
 
 requires-python = ">=3.11,<4.0"
-version = "0.1.1"
+version = "0.1.2"
 
 [[project.authors]]
 name = "Luigi Pertoldi"
