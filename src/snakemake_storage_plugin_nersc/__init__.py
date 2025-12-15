@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, List, Optional
 
-from snakemake_interface_common.exceptions import WorkflowError  # noqa
+from snakemake_interface_common.exceptions import WorkflowError
 from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
 from snakemake_interface_storage_plugins.storage_object import (
@@ -13,12 +13,13 @@ from snakemake_interface_storage_plugins.storage_object import (
     StorageObjectWrite,
     retry_decorator,
 )
-from snakemake_interface_storage_plugins.storage_provider import (  # noqa
+from snakemake_interface_storage_plugins.storage_provider import (
     ExampleQuery,
     Operation,
     StorageProviderBase,
     StorageQueryValidationResult,
 )
+from snakemake_interface_storage_plugins.io import get_constant_prefix
 
 
 @dataclass
@@ -233,16 +234,11 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
-        """Return a list of candidate matches in the storage for the query.
-
-        We interpret the query as a glob pattern under logical_root, map it to
-        the *read-only* physical root (for performance), and then map matches
-        back to logical_root.
-        """
-        import glob
-
-        pattern = str(self._to_read_only())
-        matches: list[str] = []
-        for path in glob.glob(pattern):
-            matches.append(self._to_original(path))
-        return matches
+        """Return a list of candidate matches in the storage for the query."""
+        # This is used by glob_wildcards() to find matches for wildcards in the query.
+        # The method has to return concretized queries without any remaining wildcards.
+        prefix = self._to_read_only(Path(get_constant_prefix(self.query)))
+        if prefix.is_dir():
+            return map(str, prefix.rglob("*"))
+        else:
+            return (prefix,)
