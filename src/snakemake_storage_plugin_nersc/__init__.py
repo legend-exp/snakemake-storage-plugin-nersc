@@ -30,21 +30,16 @@ class StorageProviderSettings(StorageProviderSettingsBase):
         The logical root prefix that Snakemake will see in queries.
         Defaults to "/global" (NERSC convention).
 
-    physical_root:
-        The physical root on the filesystem that should actually be used
-        for I/O. Defaults to "/dvs_ro" (NERSC read-only mirror).
-
     physical_ro_root:
         The physical *read-only* root that should be used for operations where
         the read-only mount is significantly more performant (e.g. globbing).
-        Defaults to "/dvs_ro".
+        Defaults to "/dvs_ro" (NERSC read-only mirror).
 
     By overriding these in tests or other environments, the plugin can be
     used without requiring real /global or /dvs_ro mounts.
     """
 
     logical_root: Optional[str] = None
-    physical_root: Optional[str] = None
     physical_ro_root: Optional[str] = None
 
 
@@ -109,79 +104,30 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         # Cache roots from provider settings, with NERSC defaults.
         settings: StorageProviderSettings = self.provider.settings  # type: ignore[assignment]
         self._logical_root = (settings.logical_root or "/global").rstrip("/")
-        self._physical_root = (settings.physical_root or "/dvs_ro").rstrip("/")
         self._physical_ro_root = (settings.physical_ro_root or "/dvs_ro").rstrip("/")
 
-    # ---------- required interface methods ----------
-
-    def inventory(self) -> Optional[Any]:
-        """Return an inventory object if the plugin supports it.
-
-        This plugin does not maintain a separate inventory; filesystem queries
-        are performed directly.
-        """
-        return None
-
-    def cleanup(self) -> None:
-        """Cleanup any temporary resources held by this storage object.
-
-        This plugin does not allocate external resources that require cleanup.
-        """
-        return None
-
-    # ---------- internal helpers ----------
-
-    def _map_logical_to_physical(self, physical_root: str) -> str:
+    def _to_read_only(self) -> str:
         """Map the logical query path to a given physical root."""
         query = self.query
 
         logical_prefix = self._logical_root + "/"
         if query.startswith(logical_prefix):
             rel = query[len(self._logical_root) :]
-            return os.path.join(physical_root, rel.lstrip("/"))
+            return os.path.join(self._physical_ro_root, rel.lstrip("/"))
 
         # If the query does not start with the logical root, fall back to
         # using it as-is. This should not normally happen if queries are
         # validated and constructed consistently.
         return query
 
-    def _real_path(self) -> str:
-        """Map the logical path to the actual physical filesystem path.
-
-        The mapping is:
-
-            <logical_root>/...  ->  <physical_root>/...
-
-        with defaults /global -> /dvs_ro for NERSC. In tests or other
-        environments, logical_root and physical_root can be overridden via
-        StorageProviderSettings.
-        """
-        return self._map_logical_to_physical(self._physical_root)
-
-    def _ro_real_path(self) -> str:
-        """Map the logical path to the read-only physical filesystem path.
-
-        This is used for operations where the read-only mount is much more
-        performant (e.g. globbing).
-        """
-        return self._map_logical_to_physical(self._physical_ro_root)
-
-    def _logical_from_physical(self, physical_path: str) -> str:
+    def _to_original(self, path: str) -> str:
         """Map a physical path back to the logical namespace for globbing."""
         physical_prefix = self._physical_ro_root + os.sep
-        if physical_path.startswith(physical_prefix):
-            rel = physical_path[len(physical_prefix) :]
+        if path.startswith(physical_prefix):
+            rel = path[len(physical_prefix) :]
             return self._logical_root + "/" + rel.lstrip("/")
 
-        # Fallback: also accept paths from the non-RO physical root.
-        physical_prefix = self._physical_root + os.sep
-        if physical_path.startswith(physical_prefix):
-            rel = physical_path[len(physical_prefix) :]
-            return self._logical_root + "/" + rel.lstrip("/")
-
-        return physical_path
-
-    # ---------- inventory / metadata ----------
+        return path
 
     async def inventory(self, cache: IOCacheStorageInterface):
         """Populate IOCache with existence and mtime information if available.
@@ -191,14 +137,11 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         inventory can be called without raising, and let Snakemake fall back to
         direct exists()/mtime() calls when needed.
         """
-        # Just touch the path to ensure this method is side-effect free and
-        # does not raise for existing/non-existing objects.
-        _ = Path(self._real_path()).exists()
-        return
+        return None
 
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
-        return str(Path(self._real_path()).parent)
+        return str(Path(self._to_read_only()).parent)
 
     def local_suffix(self) -> str:
         """Return a unique suffix for the local path, determined from self.query."""
@@ -210,15 +153,13 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         # Nothing special to do; Snakemake handles removal of local_path().
         return None
 
-    # ---------- basic file info ----------
-
     @retry_decorator
     def exists(self) -> bool:
-        return Path(self._real_path()).exists()
+        return Path(self._to_read_only()).exists()
 
     @retry_decorator
     def mtime(self) -> float:
-        real_path = Path(self._real_path())
+        real_path = Path(self._to_read_only())
         try:
             return real_path.stat().st_mtime
         except FileNotFoundError as e:
@@ -226,7 +167,7 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     @retry_decorator
     def size(self) -> int:
-        real_path = Path(self._real_path())
+        real_path = Path(self._to_read_only())
         try:
             if real_path.is_dir():
                 total = 0
@@ -243,12 +184,10 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         # For this simple implementation, local footprint equals size.
         return self.size()
 
-    # ---------- data transfer (read-only) ----------
-
     @retry_decorator
     def retrieve_object(self):
         """Ensure that the object is accessible locally under self.local_path()."""
-        src = Path(self._real_path())
+        src = Path(self._to_read_only())
         dst = Path(self.local_path())
 
         if not src.exists():
@@ -291,8 +230,6 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
             "NERSC storage plugin is read-only; remove is not supported."
         )
 
-    # ---------- globbing ----------
-
     @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
         """Return a list of candidate matches in the storage for the query.
@@ -303,9 +240,9 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         """
         import glob
 
-        pattern = self._ro_real_path()
+        pattern = self._to_read_only()
         matches: list[str] = []
         for path in glob.glob(pattern):
-            logical = self._logical_from_physical(path)
+            logical = self._to_original(path)
             matches.append(logical)
         return matches

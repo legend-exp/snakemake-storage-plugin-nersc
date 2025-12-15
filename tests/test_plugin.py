@@ -60,5 +60,5 @@ class TestStorage(TestStorageBase):
         # Configure plugin to map TEST_LOGICAL_ROOT → TEST_PHYSICAL_ROOT
         return StorageProviderSettings(
             logical_root=self.TEST_LOGICAL_ROOT,
-            physical_root=str(self.TEST_PHYSICAL_ROOT),
+            physical_ro_root=str(self.TEST_PHYSICAL_ROOT),
         )
