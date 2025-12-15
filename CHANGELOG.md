@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/legend-exp/snakemake-storage-plugin-nersc/compare/v0.1.1...v0.1.2) (2025-12-15)
+
+
+### Bug Fixes
+
+* add missing setting to publish workflow ([f5b5925](https://github.com/legend-exp/snakemake-storage-plugin-nersc/commit/f5b592596fa07857bcbee15b7bb080fd72cf3fae))
+
 ## [0.1.1](https://github.com/legend-exp/snakemake-storage-plugin-nersc/compare/v0.1.0...v0.1.1) (2025-12-15)
 
 
