@@ -106,6 +106,23 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         self._physical_root = (settings.physical_root or "/dvs_ro").rstrip("/")
         self._physical_ro_root = (settings.physical_ro_root or "/dvs_ro").rstrip("/")
 
+    # ---------- required interface methods ----------
+
+    def inventory(self) -> Optional[Any]:
+        """Return an inventory object if the plugin supports it.
+
+        This plugin does not maintain a separate inventory; filesystem queries
+        are performed directly.
+        """
+        return None
+
+    def cleanup(self) -> None:
+        """Cleanup any temporary resources held by this storage object.
+
+        This plugin does not allocate external resources that require cleanup.
+        """
+        return None
+
     # ---------- internal helpers ----------
 
     def _map_logical_to_physical(self, physical_root: str) -> str:
