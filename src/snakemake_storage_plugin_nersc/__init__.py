@@ -10,7 +10,6 @@ from snakemake_interface_storage_plugins.settings import StorageProviderSettings
 from snakemake_interface_storage_plugins.storage_object import (
     StorageObjectGlob,
     StorageObjectRead,
-    StorageObjectWrite,
     retry_decorator,
 )
 from snakemake_interface_storage_plugins.storage_provider import (
@@ -97,7 +96,7 @@ class StorageProvider(StorageProviderBase):
         return str(PurePosixPath(query))
 
 
-class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
+class StorageObject(StorageObjectRead, StorageObjectGlob):
     # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
@@ -209,28 +208,6 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
                     target.write_bytes(p.read_bytes())
         else:
             dst.write_bytes(src.read_bytes())
-
-    @retry_decorator
-    def store_object(self):
-        """Store the object from self.local_path() into the provider path.
-
-        This plugin is read-only with respect to the underlying filesystem,
-        so storing is not supported.
-        """
-        raise WorkflowError(
-            "NERSC storage plugin is read-only; store_object is not supported."
-        )
-
-    @retry_decorator
-    def remove(self):
-        """Remove the object from the storage.
-
-        This plugin is read-only with respect to the underlying filesystem,
-        so removal is not supported.
-        """
-        raise WorkflowError(
-            "NERSC storage plugin is read-only; remove is not supported."
-        )
 
     @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
