@@ -31,16 +31,10 @@ jobs:
 
       - name: Setup pixi
         uses: prefix-dev/setup-pixi@v0
-        with:
-          cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build source and wheel distribution + check build
         run: |
-          pixi run -e dev check-build
+          pixi run check-build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_TOKEN }}

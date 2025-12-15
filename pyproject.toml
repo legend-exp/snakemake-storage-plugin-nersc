@@ -4,6 +4,11 @@ dependencies = [
   "snakemake-interface-storage-plugins>=4.3.2,<5",
 ]
 name = "snakemake-storage-plugin-nersc"
+description = "Snakemake plugin to interact with the NERSC filesystem"
+maintainers = [
+    { name = "The LEGEND Collaboration" },
+]
+
 requires-python = ">=3.11,<4.0"
 version = "0.1.0"
 

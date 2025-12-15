@@ -5,3 +5,4 @@
 __pycache__
 pixi.lock
 .coverage
+dist
