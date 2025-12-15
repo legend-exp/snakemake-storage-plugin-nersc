@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Optional, Type
 
@@ -7,10 +6,7 @@ from snakemake_interface_storage_plugins.settings import StorageProviderSettings
 from snakemake_interface_storage_plugins.storage_provider import StorageProviderBase
 from snakemake_interface_storage_plugins.tests import TestStorageBase
 
-from snakemake_storage_plugin_nersc import (
-    StorageProvider,
-    StorageProviderSettings,
-)
+from snakemake_storage_plugin_nersc import StorageProvider, StorageProviderSettings
 
 
 class TestStorage(TestStorageBase):
@@ -45,7 +41,7 @@ class TestStorage(TestStorageBase):
 
     def get_query(self, tmp_path) -> str:
         # Create a file under the simulated physical root.
-        rel_path = os.path.join("cfs", "cdirs", "myproject", "data", "test.txt")
+        rel_path = Path("cfs") / "cdirs" / "myproject" / "data" / "test.txt"
         real_path = self._test_physical_root / rel_path
         real_path.parent.mkdir(parents=True, exist_ok=True)
         real_path.write_text("hello nersc")
@@ -54,9 +50,7 @@ class TestStorage(TestStorageBase):
         return str(self._test_logical_root / rel_path)
 
     def get_query_not_existing(self, tmp_path) -> str:
-        rel_path = os.path.join(
-            "cfs", "cdirs", "myproject", "data", "does_not_exist.txt"
-        )
+        rel_path = Path("cfs") / "cdirs" / "myproject" / "data" / "does_not_exist.txt"
         return str(self._test_logical_root / rel_path)
 
     def get_storage_provider_cls(self) -> Type[StorageProviderBase]:
