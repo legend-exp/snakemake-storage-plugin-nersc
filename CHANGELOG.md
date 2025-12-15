@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/legend-exp/snakemake-storage-plugin-nersc/compare/v0.1.2...v0.1.3) (2025-12-15)
+
+
+### Bug Fixes
+
+* specify environment name in publish workflow ([67fd3f4](https://github.com/legend-exp/snakemake-storage-plugin-nersc/commit/67fd3f4a47b6f66d8d74919356f28c0f250b3c13))
+
 ## [0.1.2](https://github.com/legend-exp/snakemake-storage-plugin-nersc/compare/v0.1.1...v0.1.2) (2025-12-15)
 
 
