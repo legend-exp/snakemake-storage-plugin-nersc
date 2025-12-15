@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
 from snakemake_interface_common.exceptions import WorkflowError  # noqa
+from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
 from snakemake_interface_storage_plugins.storage_object import (
     StorageObjectGlob,
@@ -95,6 +96,11 @@ class StorageProvider(StorageProviderBase):
         # Normalize the query path.
         return os.path.normpath(query)
 
+    def safe_print(self, query: str) -> str:
+        """Process the query to remove potentially sensitive information when printing."""
+        # No sensitive information in this simple implementation.
+        return os.path.normpath(query)
+
 
 class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
     # Do not override __init__; use __post_init__ instead.
@@ -177,6 +183,19 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
 
     # ---------- inventory / metadata ----------
 
+    async def inventory(self, cache: IOCacheStorageInterface):
+        """Populate IOCache with existence and mtime information if available.
+
+        The IOCache interface in snakemake-interface-storage-plugins 4.x does not
+        expose setters here, so we simply perform the checks to ensure that
+        inventory can be called without raising, and let Snakemake fall back to
+        direct exists()/mtime() calls when needed.
+        """
+        # Just touch the path to ensure this method is side-effect free and
+        # does not raise for existing/non-existing objects.
+        _ = Path(self._real_path()).exists()
+        return
+
     def get_inventory_parent(self) -> Optional[str]:
         """Return the parent directory of this object."""
         return str(Path(self._real_path()).parent)
@@ -185,6 +204,11 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         """Return a unique suffix for the local path, determined from self.query."""
         # Use the logical query as suffix; this keeps local paths readable.
         return self.query
+
+    def cleanup(self):
+        """Perform local cleanup of any remainders of the storage object."""
+        # Nothing special to do; Snakemake handles removal of local_path().
+        return None
 
     # ---------- basic file info ----------
 
