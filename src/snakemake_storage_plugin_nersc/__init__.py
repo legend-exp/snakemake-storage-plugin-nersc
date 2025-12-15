@@ -4,21 +4,21 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, List, Optional
 
-from snakemake_interface_common.exceptions import WorkflowError  # noqa
+from snakemake_interface_common.exceptions import WorkflowError
 from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
 from snakemake_interface_storage_plugins.settings import StorageProviderSettingsBase
 from snakemake_interface_storage_plugins.storage_object import (
     StorageObjectGlob,
     StorageObjectRead,
-    StorageObjectWrite,
     retry_decorator,
 )
-from snakemake_interface_storage_plugins.storage_provider import (  # noqa
+from snakemake_interface_storage_plugins.storage_provider import (
     ExampleQuery,
     Operation,
     StorageProviderBase,
     StorageQueryValidationResult,
 )
+from snakemake_interface_storage_plugins.io import get_constant_prefix
 
 
 @dataclass
@@ -96,7 +96,7 @@ class StorageProvider(StorageProviderBase):
         return str(PurePosixPath(query))
 
 
-class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
+class StorageObject(StorageObjectRead, StorageObjectGlob):
     # Do not override __init__; use __post_init__ instead.
 
     def __post_init__(self):
@@ -210,39 +210,12 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
             dst.write_bytes(src.read_bytes())
 
     @retry_decorator
-    def store_object(self):
-        """Store the object from self.local_path() into the provider path.
-
-        This plugin is read-only with respect to the underlying filesystem,
-        so storing is not supported.
-        """
-        raise WorkflowError(
-            "NERSC storage plugin is read-only; store_object is not supported."
-        )
-
-    @retry_decorator
-    def remove(self):
-        """Remove the object from the storage.
-
-        This plugin is read-only with respect to the underlying filesystem,
-        so removal is not supported.
-        """
-        raise WorkflowError(
-            "NERSC storage plugin is read-only; remove is not supported."
-        )
-
-    @retry_decorator
     def list_candidate_matches(self) -> Iterable[str]:
-        """Return a list of candidate matches in the storage for the query.
-
-        We interpret the query as a glob pattern under logical_root, map it to
-        the *read-only* physical root (for performance), and then map matches
-        back to logical_root.
-        """
-        import glob
-
-        pattern = str(self._to_read_only())
-        matches: list[str] = []
-        for path in glob.glob(pattern):
-            matches.append(self._to_original(path))
-        return matches
+        """Return a list of candidate matches in the storage for the query."""
+        # This is used by glob_wildcards() to find matches for wildcards in the query.
+        # The method has to return concretized queries without any remaining wildcards.
+        prefix = self._to_read_only(Path(get_constant_prefix(self.query)))
+        if prefix.is_dir():
+            return map(str, prefix.rglob("*"))
+        else:
+            return (prefix,)
