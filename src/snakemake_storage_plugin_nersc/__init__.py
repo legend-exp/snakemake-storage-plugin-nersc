@@ -33,12 +33,18 @@ class StorageProviderSettings(StorageProviderSettingsBase):
         The physical root on the filesystem that should actually be used
         for I/O. Defaults to "/dvs_ro" (NERSC read-only mirror).
 
+    physical_ro_root:
+        The physical *read-only* root that should be used for operations where
+        the read-only mount is significantly more performant (e.g. globbing).
+        Defaults to "/dvs_ro".
+
     By overriding these in tests or other environments, the plugin can be
     used without requiring real /global or /dvs_ro mounts.
     """
 
     logical_root: Optional[str] = None
     physical_root: Optional[str] = None
+    physical_ro_root: Optional[str] = None
 
 
 class StorageProvider(StorageProviderBase):
@@ -98,8 +104,23 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         settings: StorageProviderSettings = self.provider.settings  # type: ignore[assignment]
         self._logical_root = (settings.logical_root or "/global").rstrip("/")
         self._physical_root = (settings.physical_root or "/dvs_ro").rstrip("/")
+        self._physical_ro_root = (settings.physical_ro_root or "/dvs_ro").rstrip("/")
 
     # ---------- internal helpers ----------
+
+    def _map_logical_to_physical(self, physical_root: str) -> str:
+        """Map the logical query path to a given physical root."""
+        query = self.query
+
+        logical_prefix = self._logical_root + "/"
+        if query.startswith(logical_prefix):
+            rel = query[len(self._logical_root) :]
+            return os.path.join(physical_root, rel.lstrip("/"))
+
+        # If the query does not start with the logical root, fall back to
+        # using it as-is. This should not normally happen if queries are
+        # validated and constructed consistently.
+        return query
 
     def _real_path(self) -> str:
         """Map the logical path to the actual physical filesystem path.
@@ -112,24 +133,29 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         environments, logical_root and physical_root can be overridden via
         StorageProviderSettings.
         """
-        query = self.query
+        return self._map_logical_to_physical(self._physical_root)
 
-        logical_prefix = self._logical_root + "/"
-        if query.startswith(logical_prefix):
-            rel = query[len(self._logical_root) :]
-            return os.path.join(self._physical_root, rel.lstrip("/"))
+    def _ro_real_path(self) -> str:
+        """Map the logical path to the read-only physical filesystem path.
 
-        # If the query does not start with the logical root, fall back to
-        # using it as-is. This should not normally happen if queries are
-        # validated and constructed consistently.
-        return query
+        This is used for operations where the read-only mount is much more
+        performant (e.g. globbing).
+        """
+        return self._map_logical_to_physical(self._physical_ro_root)
 
     def _logical_from_physical(self, physical_path: str) -> str:
         """Map a physical path back to the logical namespace for globbing."""
+        physical_prefix = self._physical_ro_root + os.sep
+        if physical_path.startswith(physical_prefix):
+            rel = physical_path[len(physical_prefix) :]
+            return self._logical_root + "/" + rel.lstrip("/")
+
+        # Fallback: also accept paths from the non-RO physical root.
         physical_prefix = self._physical_root + os.sep
         if physical_path.startswith(physical_prefix):
             rel = physical_path[len(physical_prefix) :]
             return self._logical_root + "/" + rel.lstrip("/")
+
         return physical_path
 
     # ---------- inventory / metadata ----------
@@ -231,11 +257,12 @@ class StorageObject(StorageObjectRead, StorageObjectWrite, StorageObjectGlob):
         """Return a list of candidate matches in the storage for the query.
 
         We interpret the query as a glob pattern under logical_root, map it to
-        physical_root, and then map matches back to logical_root.
+        the *read-only* physical root (for performance), and then map matches
+        back to logical_root.
         """
         import glob
 
-        pattern = self._real_path()
+        pattern = self._ro_real_path()
         matches: list[str] = []
         for path in glob.glob(pattern):
             logical = self._logical_from_physical(path)
