@@ -1,7 +1,7 @@
 # Snakemake Storage Plugin for NERSC
 
-A Snakemake plugin to efficiently interact with the NERSC filesystem. Current
-supported features:
+A Snakemake plugin to efficiently interact with the NERSC filesystem.
 
-- Read a file or perform globbing on the read-only Community filesystem mount
-  point at `/dvs_ro`
+> [!WARNING]
+>
+> This plugin is still work in progress! Do not use!
