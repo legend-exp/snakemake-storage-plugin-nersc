@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, List, Optional
 
@@ -38,8 +38,22 @@ class StorageProviderSettings(StorageProviderSettingsBase):
     used without requiring real /global or /dvs_ro mounts.
     """
 
-    logical_root: Optional[str] = None
-    physical_ro_root: Optional[str] = None
+    logical_root: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Logical root prefix that Snakemake will see in queries (default: /global).",
+            "env_var": False,
+            "required": False,
+        },
+    )
+    physical_ro_root: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Physical read-only root used for glob/stat operations (default: /dvs_ro).",
+            "env_var": False,
+            "required": False,
+        },
+    )
 
 
 class StorageProvider(StorageProviderBase):
@@ -105,17 +119,17 @@ class StorageObject(StorageObjectRead, StorageObjectGlob):
         self._logical_root = PurePosixPath(settings.logical_root or "/global")
         self._physical_ro_root = PurePosixPath(settings.physical_ro_root or "/dvs_ro")
 
-    def _to_read_only(self) -> Path:
+    def _to_read_only(self, query: Optional[str] = None) -> Path:
         """Map the logical query path to the physical read-only root."""
-        query = PurePosixPath(self.query)
+        p = PurePosixPath(query if query is not None else self.query)
 
         try:
-            rel = query.relative_to(self._logical_root)
+            rel = p.relative_to(self._logical_root)
         except ValueError:
             # If the query does not start with the logical root, fall back to
             # using it as-is. This should not normally happen if queries are
             # validated and constructed consistently.
-            return Path(str(query))
+            return Path(str(p))
 
         return Path(str(self._physical_ro_root / rel))
 
@@ -146,8 +160,8 @@ class StorageObject(StorageObjectRead, StorageObjectGlob):
 
     def local_suffix(self) -> str:
         """Return a unique suffix for the local path, determined from self.query."""
-        # Use the logical query as suffix; this keeps local paths readable.
-        return self.query
+        # Strip leading slash so this is a relative path appended to the local base.
+        return self.query.lstrip("/")
 
     def cleanup(self):
         """Perform local cleanup of any remainders of the storage object."""
@@ -214,7 +228,7 @@ class StorageObject(StorageObjectRead, StorageObjectGlob):
         """Return a list of candidate matches in the storage for the query."""
         # This is used by glob_wildcards() to find matches for wildcards in the query.
         # The method has to return concretized queries without any remaining wildcards.
-        prefix = self._to_read_only(Path(get_constant_prefix(self.query)))
+        prefix = self._to_read_only(get_constant_prefix(self.query))
         if prefix.is_dir():
             return map(str, prefix.rglob("*"))
         else:
